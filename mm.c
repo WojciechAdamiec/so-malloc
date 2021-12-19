@@ -73,7 +73,7 @@ TODO
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
 
 static char *heap_listp;
-size_t last_prev_alloc = 1;
+static size_t last_prev_alloc = 1;
 
 static void set_prev_alloc(void *bp, size_t prev_allloc) {
   size_t size = GET_SIZE(HDRP(bp));
@@ -134,11 +134,10 @@ static void *extend_heap(size_t words) {
     return NULL;
 
   /* Initialize free block header/footer and the epilogue header */
-  PUT(HDRP(bp),
-      PACK_WITH_PREV(size, 0, last_prev_alloc)); /* Free block header */
-  PUT(FTRP(bp),
-      PACK_WITH_PREV(size, 0, last_prev_alloc));     /* Free block footer */
-  PUT(HDRP(NEXT_BLKP(bp)), PACK_WITH_PREV(0, 1, 0)); /* New epilogue header */
+  PUT(HDRP(bp), PACK_WITH_PREV(size, 0, last_prev_alloc));
+  PUT(FTRP(bp), PACK_WITH_PREV(size, 0, last_prev_alloc));
+  PUT(HDRP(NEXT_BLKP(bp)), PACK_WITH_PREV(0, 1, 0));
+
   // printf("Epilogue header pointer=%p\n", HDRP(NEXT_BLKP(bp)));
   /* Coalesce if the previous block was free */
   // printf("Heap size=%li, Heap start=%p, Heap end=%p\n", mem_heapsize(),
@@ -157,6 +156,7 @@ static void *find_fit(size_t asize) {
       return bp;
     }
   }
+
   last_prev_alloc = GET_PREV_ALLOC(HDRP(bp));
   // printf("Find_fit fail. Last_prev_alloc=%li\n", last_prev_alloc);
   return NULL; /* No fit */
@@ -186,7 +186,6 @@ int mm_init(void) {
   // printf("Init\n");
 
   last_prev_alloc = 1;
-
   /* Pad heap start so first payload is at ALIGNMENT. */
   if ((heap_listp = mem_sbrk(ALIGNMENT)) == (void *)-1)
     return -1;
