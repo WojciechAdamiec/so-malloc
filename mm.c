@@ -2,7 +2,7 @@
 Wojciech Adamiec, 310064
 I am the author of this code,
 except for parts copied and modified from CSAPP.
-Those parts inlude: Majority of macros, coalesce, malloc, calloc, realloc,
+Those parts inlude: Majority of macros, coalesce, malloc,
 init, free, extend_heap, place, find_fit.
 */
 
@@ -75,8 +75,8 @@ TODO
 #define PREV_P(bp) ((unsigned int *)(bp) + WSIZE)
 
 /* Given next or prev pointer offset get real pointer value */
-#define GET_P(p) ((unsigned int *)(p) + mem_heap_lo())
-#define PUT_P(p, val) (*(unsigned int *)(p) = (val - mem_heap_lo()))
+#define GET_P(p) ((void *)((p) + (unsigned long)(mem_heap_lo())))
+#define PUT_P(p, val) (*(unsigned int *)(p) = (val - (unsigned int *)(mem_heap_lo())))
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
@@ -84,6 +84,7 @@ TODO
 
 static char *heap_listp;
 static size_t last_prev_alloc = 1;
+static unsigned int *sentinel_pointer;
 
 // Set prev_alloc value a for given block
 static void set_prev_alloc(void *bp, size_t prev_allloc) {
@@ -226,20 +227,25 @@ int mm_init(void) {
   // printf("Init\n");
 
   last_prev_alloc = 1;
+  sentinel_pointer = mem_heap_lo() + 4;
 
-  if ((heap_listp = mem_sbrk(ALIGNMENT)) == (void *)-1)
+  if ((heap_listp = mem_sbrk(2 * ALIGNMENT)) == (void *)-1)
     return -1;
 
-  PUT(heap_listp, 0);                                    // Alignment padding
-  PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, ALLOCATED)); // Prologue header
-  PUT(heap_listp + (3 * WSIZE),
-      PACK_WITH_PREV(0, ALLOCATED, ALLOCATED)); // Epilogue header
+  PUT(heap_listp, 0);                                                              // Alignment padding
+  PUT(heap_listp + (1 * WSIZE), PACK_WITH_PREV(4 * WSIZE, ALLOCATED, ALLOCATED));  // Sentinel header
+  PUT_P(heap_listp + (2 * WSIZE), sentinel_pointer);                               // Sentinel next_ptr
+  PUT_P(heap_listp + (3 * WSIZE), sentinel_pointer);                               // Sentinel prev_ptr
+  PUT(heap_listp + (4 * WSIZE), PACK_WITH_PREV(4 * WSIZE, ALLOCATED, ALLOCATED));  // Sentinel footer
+  PUT(heap_listp + (5 * WSIZE), PACK_WITH_PREV(DSIZE, ALLOCATED, ALLOCATED));      // Prologue header
+  PUT(heap_listp + (7 * WSIZE), PACK_WITH_PREV(0, ALLOCATED, ALLOCATED));          // Epilogue header
 
   // printf("Init first 4 bytes=%i\n", GET_BYTES(heap_listp));
   // printf("Init second 4 bytes=%i\n", GET_BYTES(heap_listp + (1 * WSIZE)));
   // printf("Init third 4 bytes=%i\n", GET_BYTES(heap_listp + (2 * WSIZE)));
   // printf("Init fourth 4 bytes=%i\n", GET_BYTES(heap_listp + (3 * WSIZE)));
-  heap_listp += (2 * WSIZE);
+  // printf("Init fifth 4 bytes=%i\n", GET_BYTES(heap_listp + (4 * WSIZE)));
+  heap_listp += (6 * WSIZE);
 
   // Extend the empty heap with a free block of CHUNKSIZE bytes
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
@@ -413,33 +419,62 @@ static void print_heap(){
   void *bp;
   int i = 0;
 
+  // Print sentinel block
+  printf("[SEN] BLKP: %p next: %p prev: %p size: %5i %5s %10s\n", 
+    sentinel_pointer, 
+    GET_P(NEXT_P(sentinel_pointer)), 
+    GET_P(PREV_P(sentinel_pointer)), 
+    GET_SIZE(HDRP(sentinel_pointer)), 
+    "ALLOC", 
+    "PREV_ALLOC");
+
+  void *prologue_blkp = NEXT_BLKP(sentinel_pointer);
+
+  // Print prologue block
+  printf("[PRO] BLKP: %p next: %s prev: %s size: %5i %5s %10s\n", 
+    prologue_blkp, 
+    "0x??????????", 
+    "0x??????????", 
+    GET_SIZE(HDRP(prologue_blkp)), 
+    "ALLOC", 
+    "PREV_ALLOC");
+
   // We iterate through heap with boundary tags
   for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
     size_t hd_alloc = GET_ALLOC(HDRP(bp));
     size_t hd_prev_alloc = GET_PREV_ALLOC(HDRP(bp));
-
-    size_t ft_alloc = GET_ALLOC(FTRP(bp));
-    size_t ft_prev_alloc = GET_PREV_ALLOC(FTRP(bp));
   
     char *s_hd_alloc = (hd_alloc) ? "ALLOC" : "FREE";
-    char *s_ft_alloc = (ft_alloc) ? "ALLOC" : "FREE";
     char *s_hd_prev_alloc = (hd_prev_alloc) ? "PREV_ALLOC" : "PREV_FREE";
-    char *s_ft_prev_alloc = (ft_prev_alloc) ? "PREV_ALLOC" : "PREV_FREE";
+    void *next = GET_P(NEXT_P(bp));
+    void *prev = GET_P(PREV_P(bp));
 
-    if (hd_alloc == ALLOCATED) {
-      printf("[%i] HEAD: %p size: %i %s %s\n", i, bp, GET_SIZE(HDRP(bp)),
-              s_hd_alloc, s_hd_prev_alloc);
-      printf("[%i] DEAD FOOTER\n", i);
+    if (hd_alloc == FREE){
+      printf("[%3i] BLKP: %p next: %p prev: %p size: %5i %5s %10s\n",
+           i, bp, next, prev, GET_SIZE(HDRP(bp)), s_hd_alloc, s_hd_prev_alloc);
     }
+    else{
+      printf("[%3i] BLKP: %p next: %s prev: %s size: %5i %5s %10s\n",
+           i, bp, "0x??????????", "0x??????????", GET_SIZE(HDRP(bp)), s_hd_alloc, s_hd_prev_alloc);
+    }
+    
 
-    else if (hd_alloc == FREE) {
-      printf("[%i] HEAD: %p size: %i %s %s\n", i, bp, GET_SIZE(HDRP(bp)),
-              s_hd_alloc, s_hd_prev_alloc);
-      printf("[%i] FOOT: %p size: %i %s %s\n", i, bp, GET_SIZE(FTRP(bp)),
-              s_ft_alloc, s_ft_prev_alloc);
-    } 
     i++;
   }
+
+  bp = NEXT_BLKP(bp);
+  size_t hd_prev_alloc = GET_PREV_ALLOC(HDRP(bp));
+  char *s_hd_prev_alloc = (hd_prev_alloc) ? "PREV_ALLOC" : "PREV_FREE";
+
+  // Print epilogue block
+  printf("[EPI] BLKP: %p next: %s prev: %s size: %5i %5s %10s\n", 
+    bp, 
+    "0x??????????", 
+    "0x??????????", 
+    GET_SIZE(HDRP(bp)), 
+    "ALLOC", 
+    s_hd_prev_alloc);
+
   return;
 }
 
