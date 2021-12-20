@@ -1,7 +1,9 @@
 /*
 Wojciech Adamiec, 310064
-I am the author of this code.
-All exception from this statement are marked in comments.
+I am the author of this code,
+except for parts copied and modified from CSAPP.
+Those parts inlude: Majority of macros, coalesce, malloc, calloc, realloc,
+init, free, extend_heap, place, find_fit.
 */
 
 /*
@@ -65,12 +67,20 @@ TODO
 #define GET_PREV_ALLOC(p) ((GET(p) & 0x2) >> 1)
 
 /* Given block ptr bp, compute address of its header and footer */
-#define HDRP(bp) ((char *)(bp)-WSIZE)
+#define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+
+/* Given block ptr bp, compute address of its next and prev pointers offsets */
+#define NEXT_P(bp) ((unsigned int *)(bp))
+#define PREV_P(bp) ((unsigned int *)(bp) + WSIZE)
+
+/* Given next or prev pointer offset get real pointer value */
+#define GET_P(p) ((unsigned int *)(p) + mem_heap_lo())
+#define PUT_P(p, val) (*(unsigned int *)(p) = (val - mem_heap_lo()))
 
 /* Given block ptr bp, compute address of next and previous blocks */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
+#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp)-DSIZE)))
 
 static char *heap_listp;
 static size_t last_prev_alloc = 1;
@@ -120,8 +130,8 @@ static void *coalesce(void *bp) {
   // Merge with next block
   else if (prev_alloc && !next_alloc) {
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-    PUT(HDRP(bp), PACK(size, FREE));
-    PUT(FTRP(bp), PACK(size, FREE));
+    PUT(HDRP(bp), PACK_WITH_PREV(size, FREE, prev_alloc));
+    PUT(FTRP(bp), PACK_WITH_PREV(size, FREE, prev_alloc));
     // printf("Coalesce with next merge\n");
     return bp;
   }
@@ -130,8 +140,9 @@ static void *coalesce(void *bp) {
   else if (!prev_alloc && next_alloc) {
     set_prev_alloc(NEXT_BLKP(bp), FREE);
     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-    PUT(FTRP(bp), PACK(size, FREE));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, FREE));
+    size_t prevblk_prev_alloc = GET_PREV_ALLOC(HDRP(PREV_BLKP(bp)));
+    PUT(FTRP(bp), PACK_WITH_PREV(size, FREE, prevblk_prev_alloc));
+    PUT(HDRP(PREV_BLKP(bp)), PACK_WITH_PREV(size, FREE, prevblk_prev_alloc));
     bp = PREV_BLKP(bp);
     // printf("Coalesce with prev merge\n");
   }
@@ -139,8 +150,9 @@ static void *coalesce(void *bp) {
   // Full merge
   else {
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
-    PUT(HDRP(PREV_BLKP(bp)), PACK(size, FREE));
-    PUT(FTRP(NEXT_BLKP(bp)), PACK(size, FREE));
+    size_t prevblk_prev_alloc = GET_PREV_ALLOC(HDRP(PREV_BLKP(bp)));
+    PUT(HDRP(PREV_BLKP(bp)), PACK_WITH_PREV(size, FREE, prevblk_prev_alloc));
+    PUT(FTRP(NEXT_BLKP(bp)), PACK_WITH_PREV(size, FREE, prevblk_prev_alloc));
     bp = PREV_BLKP(bp);
     // printf("Coalesce with full merge\n");
   }
@@ -157,8 +169,7 @@ static void *extend_heap(size_t words) {
   // Allocate an even number of words to maintain alignment
   size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
   // printf("Extent_heap: bytes=%li\n", size);
-  // printf("Heap size=%li, Heap start=%p, Heap end=%p\n", mem_heapsize(),
-  // mem_heap_lo(), mem_heap_hi());
+  // printf("Heap size=%li, Heap start=%p, Heap end=%p\n", mem_heapsize(), mem_heap_lo(), mem_heap_hi());
   if ((long)(bp = mem_sbrk(size)) == -1)
     return NULL;
 
@@ -168,8 +179,7 @@ static void *extend_heap(size_t words) {
   PUT(HDRP(NEXT_BLKP(bp)), PACK_WITH_PREV(0, ALLOCATED, FREE));
 
   // printf("Epilogue header pointer=%p\n", HDRP(NEXT_BLKP(bp)));
-  // printf("Heap size=%li, Heap start=%p, Heap end=%p\n", mem_heapsize(),
-  // mem_heap_lo(), mem_heap_hi());
+  // printf("Heap size=%li, Heap start=%p, Heap end=%p\n", mem_heapsize(), mem_heap_lo(), mem_heap_hi());
 
   // Check for merge with adjacent blocks
   return coalesce(bp);
@@ -306,8 +316,7 @@ void *realloc(void *old_ptr, size_t size) {
 
   // If old_size is much bigger than current size we make a split
   if (old_size >= ALIGNMENT + asize) {
-    // printf("Realloc old_size - asize >= ALIGNMENT, asize=%li,
-    // old_size=%li\n", asize, old_size);
+    // printf("Realloc old_size - asize >= ALIGNMENT, asize=%li, old_size=%li\n", asize, old_size);
     size_t prev_alloc = GET_PREV_ALLOC(HDRP(old_ptr));
     PUT(HDRP(old_ptr), PACK_WITH_PREV(asize, ALLOCATED, prev_alloc));
     char *bp = NEXT_BLKP(old_ptr);
@@ -349,8 +358,7 @@ void *realloc(void *old_ptr, size_t size) {
       PUT(HDRP(old_ptr), PACK_WITH_PREV(asize, ALLOCATED, prev_alloc));
       // printf("Realloc split merge old_ptr=%p, asize=%li\n", old_ptr, asize);
       char *bp = NEXT_BLKP(old_ptr);
-      // printf("Realloc split merge next_ptr=%p, size=%li\n", bp, old_size +
-      // next_size - asize);
+      // printf("Realloc split merge next_ptr=%p, size=%li\n", bp, old_size + next_size - asize);
       PUT(HDRP(bp),
           PACK_WITH_PREV(old_size + next_size - asize, FREE, ALLOCATED));
       PUT(FTRP(bp),
@@ -398,19 +406,21 @@ void *calloc(size_t nmemb, size_t size) {
   return new_ptr;
 }
 
-// mm_checkheap - Check boundary tags correctness
-void mm_checkheap(int verbose) {
+// Print all blocks in heap
+static void print_heap(){
   printf("Checkheap!\n");
+  
   void *bp;
   int i = 0;
 
+  // We iterate through heap with boundary tags
   for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
     size_t hd_alloc = GET_ALLOC(HDRP(bp));
     size_t hd_prev_alloc = GET_PREV_ALLOC(HDRP(bp));
 
     size_t ft_alloc = GET_ALLOC(FTRP(bp));
     size_t ft_prev_alloc = GET_PREV_ALLOC(FTRP(bp));
-
+  
     char *s_hd_alloc = (hd_alloc) ? "ALLOC" : "FREE";
     char *s_ft_alloc = (ft_alloc) ? "ALLOC" : "FREE";
     char *s_hd_prev_alloc = (hd_prev_alloc) ? "PREV_ALLOC" : "PREV_FREE";
@@ -418,17 +428,54 @@ void mm_checkheap(int verbose) {
 
     if (hd_alloc == ALLOCATED) {
       printf("[%i] HEAD: %p size: %i %s %s\n", i, bp, GET_SIZE(HDRP(bp)),
-             s_hd_alloc, s_hd_prev_alloc);
+              s_hd_alloc, s_hd_prev_alloc);
       printf("[%i] DEAD FOOTER\n", i);
     }
 
     else if (hd_alloc == FREE) {
       printf("[%i] HEAD: %p size: %i %s %s\n", i, bp, GET_SIZE(HDRP(bp)),
-             s_hd_alloc, s_hd_prev_alloc);
+              s_hd_alloc, s_hd_prev_alloc);
       printf("[%i] FOOT: %p size: %i %s %s\n", i, bp, GET_SIZE(FTRP(bp)),
-             s_ft_alloc, s_ft_prev_alloc);
-    }
+              s_ft_alloc, s_ft_prev_alloc);
+    } 
     i++;
   }
   return;
+}
+
+// mm_checkheap - Check heap consistency
+void mm_checkheap(int verbose) {
+  if (verbose == 1)
+    print_heap();
+  
+  void *bp;
+  int i = 0;
+
+  size_t old_hd_alloc;
+
+  // We iterate through heap with boundary tags
+  for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+    size_t hd_alloc = GET_ALLOC(HDRP(bp));
+    size_t hd_prev_alloc = GET_PREV_ALLOC(HDRP(bp));
+
+    size_t ft_alloc = GET_ALLOC(FTRP(bp));
+    size_t ft_prev_alloc = GET_PREV_ALLOC(FTRP(bp));
+
+    // Check header and footer equality
+    if (hd_alloc == FREE){
+      assert(hd_alloc == ft_alloc);
+      assert(hd_prev_alloc == ft_prev_alloc);
+    }
+
+    if (bp != heap_listp){
+      // Check that there are no two subsequent free blocks
+      assert(old_hd_alloc != FREE || hd_alloc != FREE);
+
+      // Check that prev_alloc field is same as previous block alloc field
+      assert(old_hd_alloc == hd_prev_alloc);
+    }
+    
+    old_hd_alloc = hd_alloc;
+    i++;
+  }
 }
