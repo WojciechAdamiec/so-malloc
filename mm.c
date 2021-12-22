@@ -255,7 +255,7 @@ static void *extend_heap(size_t words) {
   return coalesce(bp);
 }
 
-// Find first valid free block in free block list
+// Find smallest valid free block in free block list
 static void *find_best(size_t asize) {
 
   void *bp;
@@ -325,7 +325,7 @@ void *malloc(size_t size) {
   // Adjust block size to include overhead and alignment reqs
   size_t asize = get_adjusted_size(size);
 
-  // Search the free list for a fit
+  // Search the free block list for a fit
   if ((bp = find_best(asize)) != NULL) {
     place(bp, asize);
     return bp;
