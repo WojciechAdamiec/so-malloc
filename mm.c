@@ -45,7 +45,7 @@ TODO
 /* Basic constants and macros */
 #define WSIZE 4            /* Word and header/footer size (bytes) */
 #define DSIZE 8            /* Double word size (bytes) */
-#define CHUNKSIZE (1 << 6) /* Extend heap by this amount (bytes) */
+#define CHUNKSIZE (1 << 7) /* Extend heap by this amount (bytes) */
 
 #define FREE 0
 #define ALLOCATED 1
@@ -83,6 +83,7 @@ static void printf_heap();
 static char *heap_listp;
 static size_t last_prev_alloc = 1;
 static void *sentinel_pointer;
+static void *epilogue_pointer;
 
 
 // Given block ptr compute address of next free block in list
@@ -131,12 +132,13 @@ static inline void make_sentinel_block(void* address){
 
 // Make a prologue block
 static inline void make_prologue_block(void* address){
-  PUT(HDRP(address), pack(DSIZE, ALLOCATED, ALLOCATED));      // Prologue header
+  PUT(HDRP(address), pack(DSIZE, ALLOCATED, ALLOCATED)); // Prologue header
 }
 
 // Make an epilogue block
 static inline void make_epilogue_block(void* address, size_t prev_alloc){
-  PUT(HDRP(address), pack(0, ALLOCATED, prev_alloc));         // Epilogue header
+  PUT(HDRP(address), pack(0, ALLOCATED, prev_alloc));    // Epilogue header
+  epilogue_pointer = address;
 }
 
 // Set prev_alloc value a for given block
@@ -256,22 +258,39 @@ static void *extend_heap(size_t words) {
   return coalesce(bp);
 }
 
-// Fint first valid free block in heap
-static void *find_fit(size_t asize) {
+// Find first valid free block in free block list
+static void *find_first(size_t asize) {
 
   void *bp;
 
-  for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+  for (bp = get_next_free_blkp(sentinel_pointer); bp != sentinel_pointer; bp = get_next_free_blkp(bp)) {
     if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
-      // printf("Find_fit success pointer=%p\n", bp);
+      // printf("First_fit success pointer=%p\n", bp);
       return bp;
     }
   }
 
-  last_prev_alloc = GET_PREV_ALLOC(HDRP(bp));
   // printf("Find_fit fail. Last_prev_alloc=%li\n", last_prev_alloc);
-  return NULL; /* No fit */
+  return NULL; // No fit
 }
+
+/*
+// Find first valid free block in free block list
+static void *find_best(size_t asize) {
+
+  void *bp;
+
+  for (bp = get_next_free_blkp(sentinel_pointer); bp != sentinel_pointer; bp = get_next_free_blkp(bp)) {
+    if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+      // printf("First_fit success pointer=%p\n", bp);
+      return bp;
+    }
+  }
+
+  // printf("Find_fit fail. Last_prev_alloc=%li\n", last_prev_alloc);
+  return NULL;
+}
+*/
 
 // Place new allocated block at the place of a free one
 static void place(void *bp, size_t asize) {
@@ -332,10 +351,13 @@ void *malloc(size_t size) {
   size_t asize = get_adjusted_size(size);
 
   // Search the free list for a fit
-  if ((bp = find_fit(asize)) != NULL) {
+  if ((bp = find_first(asize)) != NULL) {
     place(bp, asize);
     return bp;
   }
+
+  // Set last block previous alloc value to epilogue's prev alloc
+  last_prev_alloc = GET_PREV_ALLOC(HDRP(epilogue_pointer));
 
   // No fit found. Get more memory and place the block */
   size_t extendsize = get_extendsize(asize);
