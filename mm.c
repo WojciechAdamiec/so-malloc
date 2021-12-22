@@ -67,14 +67,11 @@ TODO
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
 /* Given block ptr bp, compute address of its next and prev pointers offsets */
-#define NEXT_P(bp) ((unsigned int *)(bp))
-#define PREV_P(bp) ((unsigned int *)(bp) + WSIZE)
-
-/* Given next or prev pointer get offset value */
-#define GET_OFFSET(p) (*(unsigned int *)(p))
+#define NEXT_P(bp) ((char *)(bp))
+#define PREV_P(bp) ((char *)(bp) + WSIZE)
 
 /* Read and write pointers from free block */
-#define GET_P(p) mem_heap_lo() + GET_OFFSET(p)
+#define GET_P(p) mem_heap_lo() + GET(p)
 #define PUT_P(p, val) *(unsigned int *)(p) = val - mem_heap_lo()
 
 /* Given block ptr bp, compute address of next and previous blocks */
@@ -82,6 +79,7 @@ TODO
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp)-DSIZE)))
 
 
+static void printf_heap();
 static char *heap_listp;
 static size_t last_prev_alloc = 1;
 static void *sentinel_pointer;
@@ -94,7 +92,7 @@ static inline void* get_next_free_blkp(void* bp){
 
 // Given block ptr compute address of prev free block in list
 static inline void* get_prev_free_blkp(void* bp){
-  return GET_P(NEXT_P(bp));
+  return GET_P(PREV_P(bp));
 }
 
 // Set next free blkp value in bp to value
@@ -125,10 +123,10 @@ static inline void make_allocated_block(void* address, size_t size, size_t prev_
 
 // Make a sentinel block
 static inline void make_sentinel_block(void* address){
-  PUT(HDRP(address), pack(4 * WSIZE, ALLOCATED, ALLOCATED));  // Sentinel header
-  PUT_P(NEXT_P(address), address);                            // Sentinel next_ptr
-  PUT_P(PREV_P(address), address);                            // Sentinel prev_ptr
-  PUT(FTRP(address), pack(4 * WSIZE, ALLOCATED, ALLOCATED));  // Sentinel footer
+  PUT(HDRP(address), pack(4 * WSIZE, FREE, ALLOCATED));  // Sentinel header
+  PUT_P(NEXT_P(address), address);                       // Sentinel next_ptr
+  PUT_P(PREV_P(address), address);                       // Sentinel prev_ptr
+  PUT(FTRP(address), pack(4 * WSIZE, FREE, ALLOCATED));  // Sentinel footer
 }
 
 // Make a prologue block
@@ -170,16 +168,20 @@ static inline size_t get_adjusted_size(size_t size) {
 
 // Add block to free block list
 static inline void add_block_to_free_list(void* new){
+  // printf("Adding block %p to free block list\n", new);
   set_next_free_blkp(new, get_next_free_blkp(sentinel_pointer));
   set_prev_free_blkp(new, sentinel_pointer);
   set_next_free_blkp(sentinel_pointer, new);
   set_prev_free_blkp(get_next_free_blkp(new), new);
+  // printf("Adding ended!\n");
 }
 
 // Add block to free block list
 static inline void remove_block_from_free_list(void* rem){
+  // printf("Reming block %p from free block list\n", rem);
   set_next_free_blkp(get_prev_free_blkp(rem), get_next_free_blkp(rem));
   set_prev_free_blkp(get_next_free_blkp(rem), get_prev_free_blkp(rem));
+  // printf("Removing ended!\n");
 }
 
 // Try to merge a given free block with adjacent ones
@@ -194,15 +196,14 @@ static void *coalesce(void *bp) {
   if (prev_alloc && next_alloc) {
     set_prev_alloc(NEXT_BLKP(bp), FREE);
     // printf("Coalesce without merge\n");
-    return bp;
   }
 
   // Merge with next block
   else if (prev_alloc && !next_alloc) {
     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    remove_block_from_free_list(NEXT_BLKP(bp));
     make_free_block(bp, size, prev_alloc);
     // printf("Coalesce with next merge\n");
-    return bp;
   }
 
   // Merge with previous block
@@ -210,6 +211,7 @@ static void *coalesce(void *bp) {
     set_prev_alloc(NEXT_BLKP(bp), FREE);
     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
     size_t prevblk_prev_alloc = GET_PREV_ALLOC(HDRP(PREV_BLKP(bp)));
+    remove_block_from_free_list(PREV_BLKP(bp));
     make_free_block(PREV_BLKP(bp), size, prevblk_prev_alloc);
     bp = PREV_BLKP(bp);
     // printf("Coalesce with prev merge\n");
@@ -219,10 +221,13 @@ static void *coalesce(void *bp) {
   else {
     size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
     size_t prevblk_prev_alloc = GET_PREV_ALLOC(HDRP(PREV_BLKP(bp)));
+    remove_block_from_free_list(PREV_BLKP(bp));
+    remove_block_from_free_list(NEXT_BLKP(bp));
     make_free_block(PREV_BLKP(bp), size, prevblk_prev_alloc);
     bp = PREV_BLKP(bp);
     // printf("Coalesce with full merge\n");
   }
+  add_block_to_free_list(bp);
   return bp;
 }
 
@@ -273,16 +278,19 @@ static void place(void *bp, size_t asize) {
   // printf("Place pointer=%p, asize=%li\n", bp, asize);
   size_t csize = GET_SIZE(HDRP(bp));
 
+  remove_block_from_free_list(bp);
+
   // If free block is big enough make a split
-  if ((csize - asize) >= (ALIGNMENT)) {
+  if (csize >= ALIGNMENT + asize) {
     make_allocated_block(bp, asize, ALLOCATED);
     bp = NEXT_BLKP(bp);
+    // printf("Placed with split, next bp=%p\n", bp);
     make_free_block(bp, csize - asize, ALLOCATED);
-    // printf("Place with split, next bp=%p\n", bp);
+    add_block_to_free_list(bp);
   } else {
+    // printf("Place without split\n");
     make_allocated_block(bp, csize, ALLOCATED);
     set_prev_alloc(NEXT_BLKP(bp), ALLOCATED);
-    // printf("Place without split\n");
   }
 }
 
@@ -394,6 +402,7 @@ void *realloc(void *old_ptr, size_t size) {
 
   // If our block is last block in heap we make extend_heap */
   if (is_block_last(old_ptr)) {
+    // printf("Realloc: Our block is last - we make extend_heap\n");
     size_t extendsize = get_extendsize(asize - old_size);
     last_prev_alloc = ALLOCATED;
     if (extend_heap(extendsize) == NULL)
@@ -402,24 +411,30 @@ void *realloc(void *old_ptr, size_t size) {
 
   // If next block is FREE we try to use it
   if (GET_ALLOC(HDRP(NEXT_BLKP(old_ptr))) == FREE) {
+    // printf("Realloc: Next block is FREE\n");
     size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(old_ptr)));
 
     // If next block (FREE one) is last in heap, but too small we extend it
     if (is_block_last(NEXT_BLKP(old_ptr)) && (old_size + next_size < asize)) {
+      // printf("Realloc: Next block is to small - we make extend heap\n");
       size_t extendsize = get_extendsize(asize - old_size - next_size);
       last_prev_alloc = FREE;
       if (extend_heap(extendsize) == NULL)
         return NULL;
+      next_size = GET_SIZE(HDRP(NEXT_BLKP(old_ptr)));
     }
     // printf("Realloc next block is FREE, next_size=%li\n", next_size);
+
     // We do merge with split if possible
     if (old_size + next_size >= ALIGNMENT + asize) {
       size_t prev_alloc = GET_PREV_ALLOC(HDRP(old_ptr));
+      remove_block_from_free_list(NEXT_BLKP(old_ptr));
       make_allocated_block(old_ptr, asize, prev_alloc);
       // printf("Realloc split merge old_ptr=%p, asize=%li\n", old_ptr, asize);
       char *bp = NEXT_BLKP(old_ptr);
       // printf("Realloc split merge next_ptr=%p, size=%li\n", bp, old_size + next_size - asize);
       make_free_block(bp, old_size + next_size - asize, ALLOCATED);
+      add_block_to_free_list(bp);
       return old_ptr;
     }
 
@@ -427,6 +442,7 @@ void *realloc(void *old_ptr, size_t size) {
     if (old_size + next_size >= asize) {
       // printf("Realloc simple merge\n");
       size_t prev_alloc = GET_PREV_ALLOC(HDRP(old_ptr));
+      remove_block_from_free_list(NEXT_BLKP(old_ptr));
       make_allocated_block(old_ptr, old_size + next_size, prev_alloc);
       set_prev_alloc(NEXT_BLKP(old_ptr), ALLOCATED);
       return old_ptr;
@@ -463,8 +479,8 @@ void *calloc(size_t nmemb, size_t size) {
 }
 
 // Print all blocks in heap
-static void print_heap(){
-  printf("Checkheap!\n");
+static void printf_heap(char* message){
+  // printf("// printf HEAP: %s!\n", message);
   
   void *bp;
   int i = 0;
@@ -522,7 +538,7 @@ static void print_heap(){
 // mm_checkheap - Check heap consistency
 void mm_checkheap(int verbose) {
   if (verbose == 1)
-    print_heap();
+    printf_heap("Checkheap");
   
   void *bp;
   int i = 0;
@@ -553,5 +569,21 @@ void mm_checkheap(int verbose) {
     
     old_hd_alloc = hd_alloc;
     i++;
+  }
+
+  // We iterate through heap with free list pointers
+  for (bp = get_next_free_blkp(sentinel_pointer); bp != sentinel_pointer; bp = get_next_free_blkp(bp)) {
+    size_t hd_alloc = GET_ALLOC(HDRP(bp));
+
+    // Check if block is free
+    assert(hd_alloc == FREE);
+
+    // Check if block points to free blocks
+    assert(GET_ALLOC(HDRP(get_next_free_blkp(bp))) == FREE);
+    assert(GET_ALLOC(HDRP(get_prev_free_blkp(bp))) == FREE);
+
+    // Check if blocks points to each other
+    assert(get_next_free_blkp(get_prev_free_blkp(bp)) == bp);
+    assert(get_prev_free_blkp(get_next_free_blkp(bp)) == bp);
   }
 }
